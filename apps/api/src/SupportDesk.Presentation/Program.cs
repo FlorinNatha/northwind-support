@@ -7,6 +7,7 @@ using SupportDesk.Application;
 using SupportDesk.Application.Abstractions;
 using SupportDesk.Infrastructure;
 using SupportDesk.Infrastructure.Configuration;
+using SupportDesk.Infrastructure.Data;
 using SupportDesk.Presentation.Extensions;
 using SupportDesk.Presentation.Filters;
 using SupportDesk.Presentation.Middleware;
@@ -93,4 +94,23 @@ app.UseAuthorization();
 
 app.MapControllers();
 
+// Health endpoint (DK-7): reports database connectivity and stays open without authentication.
+app.MapGet("/health", async (SupportDbContext db, ILogger<Program> logger) =>
+{
+    try
+    {
+        var canConnect = await db.Database.CanConnectAsync();
+        return canConnect
+            ? Results.Ok(new { status = "Healthy", database = "Connected" })
+            : Results.Json(new { status = "Unhealthy", database = "Disconnected" }, statusCode: StatusCodes.Status503ServiceUnavailable);
+    }
+    catch (Exception ex)
+    {
+        logger.LogWarning(ex, "Health check probe failed");
+        return Results.Json(new { status = "Unhealthy", error = ex.Message }, statusCode: StatusCodes.Status503ServiceUnavailable);
+    }
+}).AllowAnonymous();
+
 app.Run();
+
+public partial class Program { }
