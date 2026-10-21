@@ -35,4 +35,7 @@ public sealed class TicketDetailDto
 
     /// <summary>Derived from the dates above; never stored.</summary>
     public SlaStatus SlaStatus { get; set; }
+
+    /// <summary>Explanation of priority, SLA window and assignment decisions on creation.</summary>
+    public TicketTriageDto? Triage { get; set; }
 }

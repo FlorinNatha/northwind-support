@@ -24,11 +24,11 @@ public sealed class TicketQueries(SupportDbContext db, IClock clock) : ITicketQu
     public async Task<PagedResult<TicketListItemDto>> GetPagedAsync(TicketQuery query, CancellationToken ct)
     {
         var normalizedQuery = query.Normalized();
-        var tickets = ApplyFilters(TicketsWithLabels(), normalizedQuery);
+        var now = clock.UtcNow;
+        var isSqlServer = db.Database.IsSqlServer();
+        var tickets = ApplyFilters(TicketsWithLabels(), normalizedQuery, now, isSqlServer);
 
         var totalCount = await tickets.CountAsync(ct);
-
-        var now = clock.UtcNow;
 
         var items = await ApplySort(tickets, normalizedQuery)
             .Skip((normalizedQuery.Page - 1) * normalizedQuery.PageSize)
@@ -47,7 +47,7 @@ public sealed class TicketQueries(SupportDbContext db, IClock clock) : ITicketQu
                 UpdatedAtUtc = x.Ticket.UpdatedAtUtc,
                 DueAtUtc = x.Ticket.DueAtUtc,
                 ResolvedAtUtc = x.Ticket.ResolvedAtUtc,
-                SlaStatus = SlaEvaluator.Evaluate(x.Ticket.DueAtUtc, x.Ticket.ResolvedAtUtc, now)
+                SlaStatus = SlaEvaluator.Evaluate(x.Ticket.DueAtUtc, x.Ticket.ResolvedAtUtc, now, x.Ticket.CreatedAtUtc, 25.0)
             })
             .ToListAsync(ct);
 
@@ -76,7 +76,7 @@ public sealed class TicketQueries(SupportDbContext db, IClock clock) : ITicketQu
                 UpdatedAtUtc = x.Ticket.UpdatedAtUtc,
                 DueAtUtc = x.Ticket.DueAtUtc,
                 ResolvedAtUtc = x.Ticket.ResolvedAtUtc,
-                SlaStatus = SlaEvaluator.Evaluate(x.Ticket.DueAtUtc, x.Ticket.ResolvedAtUtc, now)
+                SlaStatus = SlaEvaluator.Evaluate(x.Ticket.DueAtUtc, x.Ticket.ResolvedAtUtc, now, x.Ticket.CreatedAtUtc, 25.0)
             })
             .FirstOrDefaultAsync(ct);
     }
@@ -103,9 +103,34 @@ public sealed class TicketQueries(SupportDbContext db, IClock clock) : ITicketQu
                 UpdatedAtUtc = x.Ticket.UpdatedAtUtc,
                 DueAtUtc = x.Ticket.DueAtUtc,
                 ResolvedAtUtc = x.Ticket.ResolvedAtUtc,
-                SlaStatus = SlaEvaluator.Evaluate(x.Ticket.DueAtUtc, x.Ticket.ResolvedAtUtc, now)
+                SlaStatus = SlaEvaluator.Evaluate(x.Ticket.DueAtUtc, x.Ticket.ResolvedAtUtc, now, x.Ticket.CreatedAtUtc, 25.0)
             })
             .ToListAsync(ct);
+    }
+
+    public async Task<IReadOnlyList<TicketEscalationDto>> GetEscalationsAsync(int ticketId, CancellationToken ct)
+    {
+        var query = from esc in db.Set<TicketEscalation>().AsNoTracking()
+                    where esc.TicketId == ticketId
+                    orderby esc.EscalatedAtUtc descending, esc.Id descending
+                    from fromAgent in db.Set<Agent>().Where(a => a.Id == esc.FromAgentId).DefaultIfEmpty()
+                    from toAgent in db.Set<Agent>().Where(a => a.Id == esc.ToAgentId).DefaultIfEmpty()
+                    select new TicketEscalationDto
+                    {
+                        Id = esc.Id,
+                        TicketId = esc.TicketId,
+                        FromPriority = esc.FromPriority,
+                        ToPriority = esc.ToPriority,
+                        FromAgent = fromAgent == null ? null : new AgentSummaryDto(fromAgent.Id, fromAgent.FullName),
+                        ToAgent = toAgent == null ? null : new AgentSummaryDto(toAgent.Id, toAgent.FullName),
+                        FromDueAtUtc = esc.FromDueAtUtc,
+                        ToDueAtUtc = esc.ToDueAtUtc,
+                        Reason = esc.Reason,
+                        EscalatedBy = esc.EscalatedBy,
+                        EscalatedAtUtc = esc.EscalatedAtUtc
+                    };
+
+        return await query.ToListAsync(ct);
     }
 
     /// <summary>
@@ -118,7 +143,11 @@ public sealed class TicketQueries(SupportDbContext db, IClock clock) : ITicketQu
         from agent in db.Set<Agent>().Where(a => a.Id == ticket.AssignedAgentId).DefaultIfEmpty()
         select new TicketWithLabels { Ticket = ticket, Customer = customer, Category = category, Agent = agent };
 
-    private static IQueryable<TicketWithLabels> ApplyFilters(IQueryable<TicketWithLabels> source, TicketQuery query)
+    private static IQueryable<TicketWithLabels> ApplyFilters(
+        IQueryable<TicketWithLabels> source,
+        TicketQuery query,
+        DateTime now,
+        bool isSqlServer)
     {
         if (query.Status.HasValue)
         {
@@ -157,6 +186,60 @@ public sealed class TicketQueries(SupportDbContext db, IClock clock) : ITicketQu
                 EF.Functions.Like(x.Ticket.Title, $"%{search}%") ||
                 EF.Functions.Like(x.Ticket.Reference, $"%{search}%") ||
                 EF.Functions.Like(x.Customer.Name, $"%{search}%"));
+        }
+
+        if (query.SlaStatus.HasValue)
+        {
+            if (isSqlServer)
+            {
+                source = query.SlaStatus.Value switch
+                {
+                    SlaStatus.NotApplicable => source.Where(x => x.Ticket.DueAtUtc == null),
+                    SlaStatus.Met => source.Where(x =>
+                        x.Ticket.DueAtUtc != null &&
+                        x.Ticket.ResolvedAtUtc != null &&
+                        x.Ticket.ResolvedAtUtc <= x.Ticket.DueAtUtc),
+                    SlaStatus.Breached => source.Where(x =>
+                        x.Ticket.DueAtUtc != null &&
+                        (
+                            (x.Ticket.ResolvedAtUtc != null && x.Ticket.ResolvedAtUtc > x.Ticket.DueAtUtc) ||
+                            (x.Ticket.ResolvedAtUtc == null && now > x.Ticket.DueAtUtc)
+                        )),
+                    SlaStatus.AtRisk => source.Where(x =>
+                        x.Ticket.DueAtUtc != null &&
+                        x.Ticket.ResolvedAtUtc == null &&
+                        now <= x.Ticket.DueAtUtc &&
+                        (
+                            EF.Functions.DateDiffSecond(x.Ticket.CreatedAtUtc, x.Ticket.DueAtUtc.Value) <= 0 ||
+                            EF.Functions.DateDiffSecond(now, x.Ticket.DueAtUtc.Value) * 4 <= EF.Functions.DateDiffSecond(x.Ticket.CreatedAtUtc, x.Ticket.DueAtUtc.Value)
+                        )),
+                    SlaStatus.WithinSla => source.Where(x =>
+                        x.Ticket.DueAtUtc != null &&
+                        x.Ticket.ResolvedAtUtc == null &&
+                        now <= x.Ticket.DueAtUtc &&
+                        EF.Functions.DateDiffSecond(x.Ticket.CreatedAtUtc, x.Ticket.DueAtUtc.Value) > 0 &&
+                        EF.Functions.DateDiffSecond(now, x.Ticket.DueAtUtc.Value) * 4 > EF.Functions.DateDiffSecond(x.Ticket.CreatedAtUtc, x.Ticket.DueAtUtc.Value)),
+                    _ => source
+                };
+            }
+            else
+            {
+                // For non-SQL Server environments (e.g. SQLite in unit tests) where EF.Functions.DateDiffSecond is unsupported.
+                var ticketDates = source.Select(x => new
+                {
+                    x.Ticket.Id,
+                    x.Ticket.DueAtUtc,
+                    x.Ticket.ResolvedAtUtc,
+                    x.Ticket.CreatedAtUtc
+                }).ToList();
+
+                var matchingIds = ticketDates
+                    .Where(x => SlaEvaluator.Evaluate(x.DueAtUtc, x.ResolvedAtUtc, now, x.CreatedAtUtc, 25.0) == query.SlaStatus.Value)
+                    .Select(x => x.Id)
+                    .ToList();
+
+                source = source.Where(x => matchingIds.Contains(x.Ticket.Id));
+            }
         }
 
         return source;
