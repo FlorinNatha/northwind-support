@@ -9,6 +9,8 @@ public interface IAgentRepository
 {
     Task<Agent?> GetByIdAsync(int id, CancellationToken ct);
 
+    Task<Agent?> GetByEmailAsync(string email, CancellationToken ct);
+
     /// <summary>Loads active agents with their current count of open tickets.</summary>
     Task<IReadOnlyList<AgentWorkload>> GetWorkloadsAsync(CancellationToken ct);
 }

@@ -1,6 +1,6 @@
 namespace SupportDesk.Application.Contracts.Tickets;
 
 /// <summary>
-/// Payload sent to escalate a ticket (BR-7).
+/// Payload sent to escalate a ticket (BR-7, AU-8).
 /// </summary>
-public sealed record EscalateTicketRequest(string Reason, string EscalatedBy);
+public sealed record EscalateTicketRequest(string Reason, string? EscalatedBy = null);
