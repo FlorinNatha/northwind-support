@@ -443,3 +443,135 @@ textarea[aria-invalid='true'] {
   white-space: nowrap;
   border: 0;
 }
+
+/* SLA Indicator */
+.sla-indicator {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+}
+
+.sla-indicator__icon {
+  font-size: 0.85em;
+  line-height: 1;
+}
+
+/* Danger Button */
+.button--danger {
+  background: var(--colour-danger-text);
+  border-color: var(--colour-danger-text);
+  color: #fff;
+}
+
+.button--danger:hover:not(:disabled) {
+  background: #871919;
+}
+
+/* Escalation Panel */
+.escalation-panel__notice {
+  padding: 10px 14px;
+  background: var(--colour-page);
+  border-radius: 6px;
+  color: var(--colour-muted);
+}
+
+.escalation-panel__notice p {
+  margin: 0;
+}
+
+.escalation-panel__preview {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-bottom: 8px;
+  font-weight: 500;
+}
+
+.escalation-panel__reason-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+}
+
+.field__char-count {
+  font-size: 0.78rem;
+  color: var(--colour-muted);
+}
+
+.field__char-count--overflow {
+  color: var(--colour-danger-text);
+  font-weight: 600;
+}
+
+.field__error--banner {
+  padding: 8px 12px;
+  background: var(--colour-danger-bg);
+  border: 1px solid var(--colour-danger-text);
+  border-radius: 6px;
+  margin-bottom: 12px;
+}
+
+/* Escalation History */
+.escalation-timeline {
+  list-style: none;
+  padding: 0;
+  margin: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+}
+
+.escalation-item {
+  padding: 12px;
+  background: var(--colour-page);
+  border-left: 3px solid var(--colour-primary);
+  border-radius: 0 6px 6px 0;
+}
+
+.escalation-item__header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  margin-bottom: 6px;
+}
+
+.escalation-item__priority-change {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.escalation-item__time {
+  font-size: 0.82rem;
+  color: var(--colour-muted);
+}
+
+.escalation-item__meta {
+  margin: 0 0 8px;
+  font-size: 0.85rem;
+  color: var(--colour-muted);
+}
+
+.escalation-item__reason {
+  margin: 0;
+  padding-left: 12px;
+  border-left: 2px solid var(--colour-border);
+  font-style: italic;
+  font-size: 0.9rem;
+  color: var(--colour-text);
+}
+
+/* Triage Breakdown */
+.triage-breakdown {
+  margin-top: 16px;
+  padding-top: 12px;
+  border-top: 1px solid var(--colour-border);
+}
+
+.triage-breakdown h3 {
+  font-size: 0.95rem;
+  margin: 0 0 12px;
+  color: var(--colour-muted);
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+}
