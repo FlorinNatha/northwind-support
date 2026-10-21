@@ -27,6 +27,10 @@ builder.Services.AddCors(options => options.AddPolicy(
 builder.Services.AddEndpointsApiExplorer();
 builder.Services.AddSwaggerGen();
 
+var slaOptions = builder.Configuration.GetSection(SupportDesk.Domain.Aggregates.Tickets.SlaOptions.SectionName)
+    .Get<SupportDesk.Domain.Aggregates.Tickets.SlaOptions>() ?? new SupportDesk.Domain.Aggregates.Tickets.SlaOptions();
+builder.Services.AddSingleton(slaOptions);
+
 builder.Services.AddApplication();
 builder.Services.AddInfrastructure(builder.Configuration);
 

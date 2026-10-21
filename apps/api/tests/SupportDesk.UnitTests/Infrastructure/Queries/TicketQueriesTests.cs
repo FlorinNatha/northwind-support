@@ -172,6 +172,77 @@ public sealed class TicketQueriesTests : IDisposable
         Assert.Equal(3, result.TotalPages);
     }
 
+    [Fact]
+    public async Task GetPagedAsync_FiltersBySlaStatus()
+    {
+        // Arrange
+        var now = _clock.UtcNow;
+
+        // t1: No due date -> NotApplicable
+        var t1 = Ticket.Raise("TCK-0001", "T1", "Desc", 1, 1, TicketPriority.Low, now);
+
+        // t2: Due in 4 hours, created now -> WithinSla (remaining = 4h / 4h = 100% > 25%)
+        var t2 = Ticket.Raise("TCK-0002", "T2", "Desc", 1, 1, TicketPriority.High, now, now.AddHours(4));
+
+        // t3: Created 9 hours ago, due in 1 hour -> AtRisk (remaining = 1h / 10h = 10% <= 25%)
+        var t3 = Ticket.Raise("TCK-0003", "T3", "Desc", 1, 1, TicketPriority.High, now.AddHours(-9), now.AddHours(1));
+
+        // t4: Due 1 hour ago -> Breached
+        var t4 = Ticket.Raise("TCK-0004", "T4", "Desc", 1, 1, TicketPriority.High, now.AddHours(-5), now.AddHours(-1));
+
+        // t5: Due in 2 hours, resolved 1 hour ago -> Met
+        var t5 = Ticket.Raise("TCK-0005", "T5", "Desc", 1, 1, TicketPriority.High, now.AddHours(-2), now.AddHours(2));
+        t5.ChangeStatus(TicketStatus.Resolved, now.AddHours(-1));
+
+        _db.Set<Ticket>().AddRange(t1, t2, t3, t4, t5);
+        await _db.SaveChangesAsync();
+
+        // Act & Assert
+        var atRiskResult = await _queries.GetPagedAsync(new TicketQuery { SlaStatus = SlaStatus.AtRisk }, CancellationToken.None);
+        Assert.Single(atRiskResult.Items);
+        Assert.Equal("TCK-0003", atRiskResult.Items[0].Reference);
+
+        var breachedResult = await _queries.GetPagedAsync(new TicketQuery { SlaStatus = SlaStatus.Breached }, CancellationToken.None);
+        Assert.Single(breachedResult.Items);
+        Assert.Equal("TCK-0004", breachedResult.Items[0].Reference);
+
+        var metResult = await _queries.GetPagedAsync(new TicketQuery { SlaStatus = SlaStatus.Met }, CancellationToken.None);
+        Assert.Single(metResult.Items);
+        Assert.Equal("TCK-0005", metResult.Items[0].Reference);
+
+        var withinSlaResult = await _queries.GetPagedAsync(new TicketQuery { SlaStatus = SlaStatus.WithinSla }, CancellationToken.None);
+        Assert.Single(withinSlaResult.Items);
+        Assert.Equal("TCK-0002", withinSlaResult.Items[0].Reference);
+
+        var naResult = await _queries.GetPagedAsync(new TicketQuery { SlaStatus = SlaStatus.NotApplicable }, CancellationToken.None);
+        Assert.Single(naResult.Items);
+        Assert.Equal("TCK-0001", naResult.Items[0].Reference);
+    }
+
+    [Fact]
+    public async Task GetEscalationsAsync_ReturnsEscalationsAuditHistory()
+    {
+        // Arrange
+        var now = _clock.UtcNow;
+        var ticket = Ticket.Raise("TCK-0010", "T10", "Desc", 1, 1, TicketPriority.Medium, now, now.AddHours(24));
+        _db.Set<Ticket>().Add(ticket);
+        await _db.SaveChangesAsync();
+
+        ticket.Escalate(TicketPriority.High, now.AddHours(8), 1, "Customer escalated", "Manager", now);
+        await _db.SaveChangesAsync();
+
+        // Act
+        var escalations = await _queries.GetEscalationsAsync(ticket.Id, CancellationToken.None);
+
+        // Assert
+        Assert.Single(escalations);
+        Assert.Equal(TicketPriority.Medium, escalations[0].FromPriority);
+        Assert.Equal(TicketPriority.High, escalations[0].ToPriority);
+        Assert.Equal("Customer escalated", escalations[0].Reason);
+        Assert.Equal("Manager", escalations[0].EscalatedBy);
+        Assert.Equal("Alex Turner", escalations[0].ToAgent?.FullName);
+    }
+
     private void SeedReferenceData()
     {
         var customer = new Customer("Fabrikam", "help@fabrikam.com", "555-0100", CustomerTier.Standard, FixedClock.DefaultNow);

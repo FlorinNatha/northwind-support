@@ -14,6 +14,8 @@ public sealed class TicketBuilder
     private TicketStatus _status = TicketStatus.New;
     private int? _assignedAgentId;
     private DateTime? _resolvedAtUtc;
+    private DateTime? _createdAtUtc;
+    private DateTime? _dueAtUtc;
 
     public TicketBuilder WithReference(string reference)
     {
@@ -39,6 +41,18 @@ public sealed class TicketBuilder
         return this;
     }
 
+    public TicketBuilder CreatedAt(DateTime createdAtUtc)
+    {
+        _createdAtUtc = createdAtUtc;
+        return this;
+    }
+
+    public TicketBuilder WithDueAt(DateTime? dueAtUtc)
+    {
+        _dueAtUtc = dueAtUtc;
+        return this;
+    }
+
     /// <summary>When the ticket reached its status; for Resolved and Closed, the resolution time.</summary>
     public TicketBuilder ResolvedAt(DateTime? resolvedAtUtc)
     {
@@ -55,7 +69,8 @@ public sealed class TicketBuilder
             customerId: 1,
             categoryId: 1,
             _priority,
-            FixedClock.DefaultNow);
+            _createdAtUtc ?? FixedClock.DefaultNow,
+            _dueAtUtc);
 
         if (_assignedAgentId is not null)
         {

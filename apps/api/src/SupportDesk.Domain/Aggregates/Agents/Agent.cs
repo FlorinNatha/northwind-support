@@ -53,6 +53,9 @@ public sealed class Agent : AggregateRoot
         _specializations.Add(new AgentSpecialization(categoryId));
     }
 
+    /// <summary>Checks whether the agent is qualified to handle the given category.</summary>
+    public bool IsSpecializedIn(int categoryId) => _specializations.Any(s => s.CategoryId == categoryId);
+
     /// <summary>Stops the agent from taking new work. Their history is kept.</summary>
     public void Deactivate() => IsActive = false;
 }

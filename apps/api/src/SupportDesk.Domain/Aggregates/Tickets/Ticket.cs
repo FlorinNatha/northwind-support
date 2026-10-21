@@ -49,8 +49,7 @@ public sealed class Ticket : AggregateRoot
     public bool IsOpen => Status is not (TicketStatus.Resolved or TicketStatus.Closed);
 
     /// <summary>
-    /// Raises a new ticket for a customer. It starts as <see cref="TicketStatus.New"/>, with no
-    /// owner and no due date.
+    /// Raises a new ticket for a customer.
     /// </summary>
     public static Ticket Raise(
         string reference,
@@ -59,7 +58,8 @@ public sealed class Ticket : AggregateRoot
         int customerId,
         int categoryId,
         TicketPriority priority,
-        DateTime nowUtc)
+        DateTime nowUtc,
+        DateTime? dueAtUtc = null)
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(reference);
         ArgumentException.ThrowIfNullOrWhiteSpace(title);
@@ -75,8 +75,18 @@ public sealed class Ticket : AggregateRoot
             Priority = priority,
             Status = TicketStatus.New,
             CreatedAtUtc = nowUtc,
-            UpdatedAtUtc = nowUtc
+            UpdatedAtUtc = nowUtc,
+            DueAtUtc = dueAtUtc
         };
+    }
+
+    /// <summary>
+    /// Sets or clears the SLA due date.
+    /// </summary>
+    public void SetDueAt(DateTime? dueAtUtc, DateTime nowUtc)
+    {
+        DueAtUtc = dueAtUtc;
+        UpdatedAtUtc = nowUtc;
     }
 
     /// <summary>
@@ -102,6 +112,11 @@ public sealed class Ticket : AggregateRoot
         UpdatedAtUtc = nowUtc;
     }
 
+    private readonly List<TicketEscalation> _escalations = [];
+
+    /// <summary>Immutable record of every escalation this ticket has undergone.</summary>
+    public IReadOnlyCollection<TicketEscalation> Escalations => _escalations;
+
     /// <summary>
     /// Hands the ticket to an agent, or takes it back off them when <paramref name="agentId"/>
     /// is null. Whether the agent may take it is checked by the caller, which can see agents.
@@ -110,5 +125,55 @@ public sealed class Ticket : AggregateRoot
     {
         AssignedAgentId = agentId;
         UpdatedAtUtc = nowUtc;
+    }
+
+    /// <summary>
+    /// Escalates the ticket (BR-7): increases priority, updates due date and owner,
+    /// and records an immutable escalation history entry.
+    /// </summary>
+    /// <exception cref="BusinessRuleViolationException">Ticket is already Critical or has been Resolved/Closed.</exception>
+    public TicketEscalation Escalate(
+        TicketPriority newPriority,
+        DateTime newDueAtUtc,
+        int? newAgentId,
+        string reason,
+        string escalatedBy,
+        DateTime nowUtc)
+    {
+        if (Priority == TicketPriority.Critical)
+        {
+            throw new BusinessRuleViolationException(
+                $"Ticket {Reference} is already at Critical priority and cannot be escalated.");
+        }
+
+        if (!IsOpen)
+        {
+            throw new BusinessRuleViolationException(
+                $"Ticket {Reference} is {Status.ToString().ToLowerInvariant()} and cannot be escalated.");
+        }
+
+        ArgumentException.ThrowIfNullOrWhiteSpace(reason);
+        ArgumentException.ThrowIfNullOrWhiteSpace(escalatedBy);
+
+        var escalation = new TicketEscalation(
+            Id,
+            fromPriority: Priority,
+            toPriority: newPriority,
+            fromAgentId: AssignedAgentId,
+            toAgentId: newAgentId,
+            fromDueAtUtc: DueAtUtc,
+            toDueAtUtc: newDueAtUtc,
+            reason: reason,
+            escalatedBy: escalatedBy,
+            escalatedAtUtc: nowUtc);
+
+        Priority = newPriority;
+        DueAtUtc = newDueAtUtc;
+        AssignedAgentId = newAgentId;
+        UpdatedAtUtc = nowUtc;
+
+        _escalations.Add(escalation);
+
+        return escalation;
     }
 }

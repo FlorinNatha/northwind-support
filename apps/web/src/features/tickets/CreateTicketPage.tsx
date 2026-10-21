@@ -3,8 +3,11 @@ import { Link, useNavigate } from 'react-router-dom';
 import { ErrorMessage } from '../../components/ErrorMessage';
 import { Spinner } from '../../components/Spinner';
 import { useReferenceData } from '../../hooks/useReferenceData';
+import { formatDateTime } from '../../lib/format';
 import type { TicketDetail } from '../../types/api';
 import { CreateTicketForm } from './components/CreateTicketForm';
+import { PriorityBadge } from './components/TicketBadges';
+import { SlaIndicator } from './components/SlaIndicator';
 
 export function CreateTicketPage() {
   const reference = useReferenceData();
@@ -30,10 +33,46 @@ export function CreateTicketPage() {
 
       {created && (
         <div className="card notice" role="status">
+          <h2>Ticket Created: {created.reference}</h2>
           <p>
-            Raised <strong>{created.reference}</strong> for {created.customer.name}.
+            Raised <strong>{created.reference}</strong> for <strong>{created.customer.name}</strong>.
           </p>
-          <div className="button-row">
+
+          {created.triage && (
+            <div className="triage-breakdown">
+              <h3>Triage Assessment</h3>
+              <dl className="summary">
+                <div>
+                  <dt>Priority</dt>
+                  <dd>
+                    <PriorityBadge priority={created.priority} />
+                    <span className="summary__note">{created.triage.priorityReason}</span>
+                  </dd>
+                </div>
+
+                <div>
+                  <dt>SLA Target</dt>
+                  <dd>
+                    <SlaIndicator status={created.slaStatus} />
+                    {created.dueAtUtc && (
+                      <span className="summary__note">Due: {formatDateTime(created.dueAtUtc)}</span>
+                    )}
+                    <span className="summary__note">{created.triage.slaReason}</span>
+                  </dd>
+                </div>
+
+                <div>
+                  <dt>Assignment</dt>
+                  <dd>
+                    <strong>{created.assignedAgent?.fullName ?? 'Unassigned'}</strong>
+                    <span className="summary__note">{created.triage.assignmentReason}</span>
+                  </dd>
+                </div>
+              </dl>
+            </div>
+          )}
+
+          <div className="button-row" style={{ marginTop: 16 }}>
             <button
               type="button"
               className="button button--primary"
