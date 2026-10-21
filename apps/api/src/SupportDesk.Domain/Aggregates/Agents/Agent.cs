@@ -39,6 +39,21 @@ public sealed class Agent : AggregateRoot
 
     public DateTime CreatedAtUtc { get; private set; }
 
+    /// <summary>
+    /// Hashed and salted password for authentication (AU-1, AU-2).
+    /// Nullable for backwards compatibility with unconfigured accounts.
+    /// </summary>
+    public string? PasswordHash { get; private set; }
+
+    /// <summary>
+    /// Updates the agent's password hash.
+    /// </summary>
+    public void SetPasswordHash(string passwordHash)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(passwordHash);
+        PasswordHash = passwordHash;
+    }
+
     /// <summary>The ticket categories this agent is qualified for.</summary>
     public IReadOnlyCollection<AgentSpecialization> Specializations => _specializations;
 
