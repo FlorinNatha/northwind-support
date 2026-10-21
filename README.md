@@ -14,14 +14,14 @@ A support ticket management system: raise tickets, search and filter them, assig
 
 ### Task 2: Triage Engine, SLA Compliance & Escalation
 - **Automatic Triage:**
-  - Tickets with `Security` or `Outage` categories automatically elevate to `Critical` priority upon creation.
-  - SLA due dates are calculated from creation time using priority windows (Critical: 4h, High: 8h, Medium: 24h, Low: 72h). Premium customer windows are halved (50% reduction) with a strict 1-hour minimum floor.
-  - Deterministic auto-assignment: specialist categories (`Outage`, `Security`, `Billing`) require matching agent specialties; inactive agents and agents at maximum capacity (`OpenTickets >= MaxConcurrentTickets`) are excluded; the eligible agent with the fewest open tickets wins deterministically (ties broken by agent ID). If none are eligible, the ticket remains unassigned with a 201 Created response.
+  - Tickets with `Security` or `Outage` categories automatically elevate to `Critical` priority upon creation (BR-1).
+  - SLA due dates are calculated from creation time using priority windows (Critical: 4h, High: 8h, Medium: 24h, Low: 72h). Premium customer windows are halved (50% reduction) with a strict 1-hour minimum floor (BR-2, BR-3).
+  - Deterministic auto-assignment: specialist categories (`Outage`, `Security`, `Billing`) require matching agent specialties; inactive agents and agents at maximum capacity (`OpenTickets >= MaxConcurrentTickets`) are excluded; the eligible agent with the fewest open tickets wins deterministically (ties broken by agent ID) (BR-4, BR-5). If none are eligible, the ticket remains unassigned with a 201 Created response explaining the reason (BR-6).
 - **Ticket Escalation:**
   - Priority steps up by one level (Low → Medium → High → Critical). Tickets already `Critical`, `Resolved`, or `Closed` return `409 Conflict`.
   - Due date is recomputed from the current timestamp (`UtcNow`).
   - Assignee eligibility is re-evaluated and re-assigned if the current agent is no longer eligible.
-  - An immutable `TicketEscalationHistory` record is persisted capturing before/after priority, assignee, timestamp, reason, and actor.
+  - An immutable `TicketEscalation` record is persisted capturing before/after priority, assignee, timestamp, reason, and actor (BR-7).
 - **Frontend Features:** Unified `SlaIndicator` component, interactive `EscalationPanel` with client-side validation and server error feedback, escalation history audit timeline, and triage status indicators.
 
 ### Task 3: Login and Authentication
@@ -58,10 +58,49 @@ A support ticket management system: raise tickets, search and filter them, assig
    - *Trade-off:* `localStorage` is susceptible to XSS if malicious scripts execute in the browser context, but immune to CSRF. `HttpOnly` cookies protect against XSS token theft, but introduce CSRF risks, CORS cookie credentials handling, and same-site configuration complexity across separate frontend/backend hostnames. Given the separate dev servers and container port mappings, `localStorage` provided clean, predictable token management.
    - *Production Recommendation:* In production, an OAuth2/OIDC Authorization Code Flow with PKCE terminating at a Backend-for-Frontend (BFF) proxy storing session cookies with `HttpOnly`, `SameSite=Strict`, and `Secure` attributes would provide defense in depth against both XSS and CSRF.
 
-4. **Database Migrations on Container Startup:**
+4. **EscalatedBy Attribution (Task 3 Completion):**
+   - *Chosen:* Derived exclusively from the authenticated JWT claims in `EscalateTicketCommandHandler` using `IUserContext` / `HttpContext.User`.
+   - *Why:* We ended up with server-enforced token attribution as instructed in AU-12 and Section 2.3.B. A client-supplied `escalatedBy` in the request body can be forged; extracting the caller's identity directly from the signed JWT guarantees audit trail integrity.
+
+5. **Database Migrations on Container Startup:**
    - *Chosen:* In Development (`ASPNETCORE_ENVIRONMENT=Development`), the API executes `MigrateAndSeedAsync()` at startup.
    - *Why:* Keeps local developer onboarding and evaluation one command away from a running system (`docker compose up`).
    - *Real Deployment Approach:* In production, running migrations in application web processes is an anti-pattern because multiple concurrent container instances can race or deadlock on migration locks, and application runtime identities should not have DDL (table alter/create) database privileges. In production, migrations should be applied as an isolated CI/CD deployment step, a Kubernetes `initContainer`, or an ephemeral migration job using elevated deployment credentials before routing traffic to web instances.
+
+---
+
+## The Defect (DEFECT-117)
+
+- **Root Cause:** In `useTicketList.ts`, the hook managed both instantaneous filter dropdowns and text search in a coupled state object. Because the search parameter was asynchronously debounced, changing a filter dropdown either sent no immediate request or maintained stale filter parameters in React Query until search debounce settled.
+- **The Fix:** Separated immediate filter selection from text search. Dropdown filter changes instantly update query state, reset the pagination to `page: 1`, and trigger an immediate fetch without waiting for keystroke debounce. Text search remains debounced (300ms) to avoid request flooding.
+- **How to Verify:**
+  - Automated: Run `npm test` to execute `apps/web/src/features/tickets/hooks/useTicketList.test.ts`. The regression test asserts that changing Priority sends an immediate request with `priority=High` without delay.
+  - Manual: Open the ticket list at `http://localhost:5173/`, select a priority (e.g. *High*), and verify in browser DevTools Network tab that an immediate API request is fired and only High tickets are rendered.
+
+---
+
+## Filtering Architecture
+
+- **Where Filters are Applied:** All filters are evaluated in SQL inside `SupportDesk.Infrastructure.Queries.TicketQueries.ApplyFilters` using EF Core `IQueryable<TicketWithLabels>`. Predicates (`Status`, `Priority`, `CategoryId`, `CustomerId`, `AssignedAgentId`, `UnassignedOnly`, `Search`, and `SlaStatus`) are appended before `CountAsync` and pagination (`Skip`/`Take`).
+- **How We Checked the SQL:** Verified via ASP.NET Core console SQL logging (`Microsoft.EntityFrameworkCore.Database.Command` set to `Information` in `appsettings.Development.json`). We confirmed that queries produce parameterized SQL `WHERE` clauses, that `Search` translates to SQL `LIKE`, and that `slaStatus` translates to SQL Server `DATEDIFF(second, ...)` without client-side evaluation warnings.
+- **How the Next Filter Gets Added:**
+  1. **Contract:** Add the optional filter property to `TicketQuery.cs` in `SupportDesk.Application.Contracts.Tickets`.
+  2. **Query Pipeline:** In `TicketQueries.ApplyFilters`, add `if (query.MyFilter.HasValue) { source = source.Where(x => ...); }`.
+  3. **Web API Client:** In `apps/web/src/features/tickets/api.ts`, add the property to `TicketFilters` interface and pass it to `URLSearchParams`.
+  4. **UI Filter Bar:** Add the corresponding input or dropdown control to `TicketFilterBar.tsx`.
+
+---
+
+## Database Schema & Indexing Strategy
+
+### Schema Additions
+1. **`Agents` Table:** Added `PasswordHash NVARCHAR(MAX) NULL` to store PBKDF2 hashed credentials.
+2. **`TicketEscalations` Table:** Added table storing immutable escalation audit records (`Id`, `TicketId`, `FromPriority`, `ToPriority`, `FromAgentId`, `ToAgentId`, `FromDueAtUtc`, `ToDueAtUtc`, `Reason`, `EscalatedBy`, `EscalatedAtUtc`).
+
+### Indexes Added & Why
+- **`IX_TicketEscalations_TicketId`:** Foreign key index on `TicketId` to ensure optimal performance when deleting or inspecting tickets with cascading foreign keys.
+- **`IX_TicketEscalations_TicketId_EscalatedAtUtc`:** Composite index on `(TicketId, EscalatedAtUtc DESC)` configured in `TicketEscalationConfiguration.cs`.
+  - *Why:* The endpoint `GET /api/tickets/{id}/escalations` queries escalation history for a specific ticket ordered newest first (`ORDER BY EscalatedAtUtc DESC`). This composite index allows SQL Server to seek directly to the ticket's history and scan in reverse index order, eliminating expensive sort operations (`Sort` in execution plans).
 
 ---
 
@@ -81,38 +120,30 @@ All seeded agents share the development fixture password:
 
 ---
 
-## Quick Start & Running the Project
+## Docker & Containerisation (Task 4)
 
-### Option A: Local Development (Bare Metal API + React)
-
-```bash
-# 1. Start SQL Server in Docker
-npm run db:up
-
-# 2. Run API (.NET 10) in Terminal 1
-npm run api
-
-# 3. Run Web App (Vite) in Terminal 2
-npm run web
-```
-
-- Web UI: http://localhost:5173
-- API: https://localhost:7043 (http://localhost:5043)
-- Swagger: https://localhost:7043/swagger
-
----
-
-### Option B: Containerised API via Docker Compose (Task 4)
+### Building and Running the Stack
 
 ```bash
 # 1. Build and start the whole stack (SQL Server + API)
 docker compose up --build -d
 
-# 2. Start the web app pointing at the containerised API
+# 2. Run the web app pointing at the containerised API
 VITE_API_PROXY_TARGET=http://localhost:5080 npm run web
 ```
 
-#### Task 4 Verification Checklist:
+### Environment Variables
+
+| Variable | Service | Description | Example / Default |
+| --- | --- | --- | --- |
+| `ConnectionStrings__DefaultConnection` | `api` | SQL Server connection string | `Server=sqlserver,1433;Database=SupportDesk;User Id=sa;...` |
+| `Jwt__SigningKey` | `api` | HMAC-SHA256 256-bit signing key | Configured in `docker-compose.yml` & `.env.example` |
+| `Jwt__Issuer` | `api` | Valid JWT token issuer | `SupportDesk` |
+| `Jwt__Audience` | `api` | Valid JWT token audience | `SupportDesk.Client` |
+| `ASPNETCORE_ENVIRONMENT` | `api` | ASP.NET hosting environment | `Development` |
+| `VITE_API_PROXY_TARGET` | `web` | Vite reverse proxy destination | `http://localhost:5080` |
+
+### Task 4 Verification Checklist:
 1. **Health Check Probe:**
    ```bash
    curl -i http://localhost:5080/health
@@ -135,22 +166,54 @@ VITE_API_PROXY_TARGET=http://localhost:5080 npm run web
 
 ---
 
-## Running the Automated Test Suites
+## Testing Strategy
+
+### How to Run the Tests
 
 ```bash
 # Runs both .NET unit/architecture tests and Web Vitest test suites
 npm test
 ```
 
-- **Backend:** 130 Unit Tests + 4 Architecture Tests (134 total passing, 0 failing)
-- **Frontend:** 28 Unit / Component Tests (all 28 passing, 0 failing)
-- **Code Quality:** `npm run lint` and `npm run typecheck` pass with 0 errors and 0 warnings.
+### What We Chose to Test
+- **Core Domain Logic & SLA Boundaries:** Triage priority enforcement (Outage/Security → Critical), customer tier window halving with strict 1-hour minimum floor, deterministic least-loaded agent assignment, capacity exclusion (`OpenTickets >= MaxConcurrentTickets`), and state transition constraints (409 on Critical/Resolved/Closed).
+- **Authentication & Security:** Generic 401 error parity (preventing identity enumeration for invalid email, wrong password, or inactive agent), password hashing/salting verification, and JWT claim extraction.
+- **Database Query Filtering:** SQL predicate filtering across multiple criteria (`status`, `priority`, `slaStatus`, `customer`, `agent`, and `search`), boundary comparisons, and accurate total counts.
+- **Frontend Interaction & Edge Cases:** Validation on escalation reason length (blocking requests under 5 characters), 409 conflict feedback banners, accessible multi-state `SlaIndicator` rendering without relying on color alone, and protected route redirection preserving target URLs.
+
+### What We Deliberately Did Not Test
+- **Framework & Infrastructure Wiring:** We avoided testing EF Core internal mechanics, standard ASP.NET Core middleware pipeline mechanics, or database engine drivers.
+- **Trivial POCOs and DTOs:** Plain DTOs, getters, and setters without logic are omitted to maintain a high signal-to-noise ratio in test suites.
+
+---
+
+## AI Usage
+
+In compliance with the assignment instructions, below is an honest account of our AI tooling and workflow:
+
+- **Tools Used and For What:**
+  - AI Assistant (Antigravity / Claude) was used for: accelerating initial boilerplate DTO creation, scaffolding xUnit test permutation matrices for SLA matrix rules, advising on Docker multi-stage build optimization, and TypeScript interface declarations.
+- **Workflow / Prompt That Worked Well:**
+  - Providing exact business rules and domain requirements upfront before generating code (e.g., *"Generate comprehensive xUnit tests for SLA calculation covering Standard vs Premium customer tiers, 1-hour floor boundaries, and edge cases where priority is forced to Critical"*).
+- **Something AI Generated That Was Accepted As-Is:**
+  - Standard DTO record definitions, regular expressions for email and input validation, and the multi-stage Dockerfile layer structure.
+- **Something AI Generated That Was Changed or Rejected, and Why:**
+  1. *Central Fallback Policy vs Controller Attributes:* AI initially suggested decorating every controller action with `[Authorize]`. We rejected this approach in favor of ASP.NET Core's global `FallbackPolicy` in `Program.cs`. Controller-level attributes are fragile and easily forgotten when new endpoints are introduced; a global fallback policy guarantees that the API is secure by default.
+  2. *EscalatedBy Body Parameter:* AI generated an escalation endpoint that trusted an `escalatedBy` field sent in the client JSON body. We rejected this in favor of extracting the authenticated identity directly from the validated JWT claims (`User.FindFirstValue(ClaimTypes.NameIdentifier)`), eliminating identity spoofing.
+  3. *In-Memory SLA Filtering:* AI initially suggested evaluating `slaStatus` using LINQ in-memory after fetching tickets. We rejected this because the assignment explicitly required all filtering, counting, and paging to execute in SQL; we implemented `EF.Functions.DateDiffSecond` in EF Core instead.
+- **Bugs AI Introduced or Helped Find:**
+  - AI initially omitted the 1-hour minimum SLA floor for high-priority tickets belonging to premium customers, which our xUnit boundary tests caught and corrected.
+  - AI helped identify that `DueAtUtc` is nullable for unassigned/open legacy tickets, preventing potential null reference exceptions during SQL query evaluation.
+- **How Generated Code Was Verified:**
+  - Ran full automated test suites (134 backend tests, 28 frontend tests).
+  - Inspected generated SQL in the API console output to ensure predicates were evaluated on SQL Server.
+  - Executed end-to-end HTTP requests via `curl.exe` and browser DevTools against live Docker containers.
 
 ---
 
 ## Known Limitations & Out of Scope
 
-As specified in the assignment constraints, the following features were intentionally excluded from this iteration and should be implemented in future phases:
+In accordance with the assignment guidelines, the following features were intentionally excluded from this iteration:
 - **Identity & Account Management:** Self-registration, email verification, password reset workflows, and account lockout after repeated failed attempts.
 - **Advanced Auth:** Multi-factor authentication (MFA), OAuth2/OIDC social logins, and refresh token rotation with sliding expiration.
 - **Role-Based Access Control (RBAC):** Fine-grained permission matrices (e.g. Lead Agent vs Regular Agent permissions).
