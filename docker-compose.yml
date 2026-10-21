@@ -23,5 +23,23 @@ services:
       retries: 12
       start_period: 20s
 
+  api:
+    build:
+      context: .
+      dockerfile: apps/api/Dockerfile
+    container_name: supportdesk-api
+    environment:
+      ASPNETCORE_ENVIRONMENT: "${ASPNETCORE_ENVIRONMENT:-Development}"
+      ConnectionStrings__Default: "Server=sqlserver,1433;Database=SupportDesk;User Id=sa;Password=${MSSQL_SA_PASSWORD:-Local_Dev_Password1};TrustServerCertificate=True;Encrypt=False"
+      Jwt__SecretKey: "${Jwt__SecretKey:-${JWT_SECRET_KEY:-NorthwindSupportDeskDevJwtSecretKey2026!}}"
+      Jwt__Issuer: "${Jwt__Issuer:-SupportDesk}"
+      Jwt__Audience: "${Jwt__Audience:-SupportDeskClient}"
+      Jwt__TokenLifetimeMinutes: "${Jwt__TokenLifetimeMinutes:-480}"
+    ports:
+      - "5080:8080"
+    depends_on:
+      sqlserver:
+        condition: service_healthy
+
 volumes:
   supportdesk-sql:

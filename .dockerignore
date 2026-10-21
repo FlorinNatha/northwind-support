@@ -1,0 +1,11 @@
+**/.git
+**/.gitignore
+**/.vs
+**/.vscode
+**/bin/
+**/obj/
+**/node_modules/
+apps/web/
+**/.env*
+!**/.env.example
+*.md
