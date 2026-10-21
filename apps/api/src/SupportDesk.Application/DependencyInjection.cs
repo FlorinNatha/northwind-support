@@ -36,6 +36,9 @@ public static class DependencyInjection
 
         services.AddScoped<GetCategoriesQueryHandler>();
 
+        services.AddScoped<SupportDesk.Application.Features.Auth.Commands.Login.LoginCommandHandler>();
+        services.AddScoped<SupportDesk.Application.Features.Auth.Queries.GetCurrentAgent.GetCurrentAgentQueryHandler>();
+
         services.AddSingleton(sp => sp.GetService<SupportDesk.Domain.Aggregates.Tickets.SlaOptions>() ?? new SupportDesk.Domain.Aggregates.Tickets.SlaOptions());
         services.AddSingleton<SupportDesk.Domain.Aggregates.Tickets.SlaPolicy>();
         services.AddSingleton<SupportDesk.Domain.Aggregates.Agents.AgentAssignmentPolicy>();

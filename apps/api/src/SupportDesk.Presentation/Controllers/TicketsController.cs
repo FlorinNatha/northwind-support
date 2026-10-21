@@ -59,7 +59,7 @@ public sealed class TicketsController : ControllerBase
         CancellationToken ct) =>
         handler.HandleAsync(id, request, ct);
 
-    /// <summary>Escalates the ticket to the next priority level, recalculating SLA and reassigning if needed (BR-7).</summary>
+    /// <summary>Escalates the ticket to the next priority level, recalculating SLA and reassigning if needed (BR-7, AU-8).</summary>
     [HttpPost("{id:int}/escalate")]
     public async Task<ActionResult<EscalateTicketResultDto>> Escalate(
         int id,
@@ -67,7 +67,13 @@ public sealed class TicketsController : ControllerBase
         [FromServices] EscalateTicketCommandHandler handler,
         CancellationToken ct)
     {
-        var result = await handler.HandleAsync(id, request, ct);
+        // AU-8: escalatedBy comes from the authenticated token, not client request body
+        var actorName = User.Identity?.Name
+            ?? User.FindFirst("name")?.Value
+            ?? (!string.IsNullOrWhiteSpace(request.EscalatedBy) ? request.EscalatedBy : "Support Agent");
+
+        var effectiveRequest = request with { EscalatedBy = actorName };
+        var result = await handler.HandleAsync(id, effectiveRequest, ct);
         return Ok(result);
     }
 

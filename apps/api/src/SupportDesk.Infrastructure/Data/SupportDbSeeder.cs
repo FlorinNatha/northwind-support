@@ -24,6 +24,19 @@ public sealed class SupportDbSeeder(SupportDbContext db, IClock clock, ILogger<S
     {
         if (await db.Set<Ticket>().AnyAsync(ct))
         {
+            var agentsWithoutPassword = await db.Set<Agent>().Where(a => a.PasswordHash == null).ToListAsync(ct);
+            if (agentsWithoutPassword.Count > 0)
+            {
+                var hasher = new Microsoft.AspNetCore.Identity.PasswordHasher<Agent>();
+                var defaultHash = hasher.HashPassword(null!, DefaultDevPassword);
+                foreach (var agent in agentsWithoutPassword)
+                {
+                    agent.SetPasswordHash(defaultHash);
+                }
+                await db.SaveChangesAsync(ct);
+                logger.LogInformation("Updated dev password hash for {Count} existing agents.", agentsWithoutPassword.Count);
+            }
+
             logger.LogInformation("Seed data already present; skipping.");
             return;
         }
@@ -69,20 +82,37 @@ public sealed class SupportDbSeeder(SupportDbContext db, IClock clock, ILogger<S
         new("Wide World Importers", "support@wideworld.example", "+65 6555 0106", CustomerTier.Premium, now.AddDays(-90))
     ];
 
+    /// <summary>
+    /// Default development password for all seeded agents (AU-3).
+    /// Hashed at seed time using ASP.NET Core PasswordHasher (PBKDF2).
+    /// </summary>
+    public const string DefaultDevPassword = "Password123!";
+
     private static List<Agent> SeedAgents(DateTime now)
     {
+        var hasher = new Microsoft.AspNetCore.Identity.PasswordHasher<Agent>();
+        var defaultHash = hasher.HashPassword(null!, DefaultDevPassword);
+
         var yuki = new Agent("Yuki Tanaka", "yuki.tanaka@northwind-support.example", 8, now.AddDays(-600));
+        yuki.SetPasswordHash(defaultHash);
         yuki.Deactivate();
 
-        return
-        [
-            new("Alex Turner", "alex.turner@northwind-support.example", 10, now.AddDays(-500)),
-            new("Ben Osei", "ben.osei@northwind-support.example", 8, now.AddDays(-460)),
-            new("Priya Nair", "priya.nair@northwind-support.example", 8, now.AddDays(-400)),
-            new("Sara Lindqvist", "sara.lindqvist@northwind-support.example", 6, now.AddDays(-280)),
-            new("Marcus Doyle", "marcus.doyle@northwind-support.example", 6, now.AddDays(-200)),
-            yuki
-        ];
+        var alex = new Agent("Alex Turner", "alex.turner@northwind-support.example", 10, now.AddDays(-500));
+        alex.SetPasswordHash(defaultHash);
+
+        var ben = new Agent("Ben Osei", "ben.osei@northwind-support.example", 8, now.AddDays(-460));
+        ben.SetPasswordHash(defaultHash);
+
+        var priya = new Agent("Priya Nair", "priya.nair@northwind-support.example", 8, now.AddDays(-400));
+        priya.SetPasswordHash(defaultHash);
+
+        var sara = new Agent("Sara Lindqvist", "sara.lindqvist@northwind-support.example", 6, now.AddDays(-280));
+        sara.SetPasswordHash(defaultHash);
+
+        var marcus = new Agent("Marcus Doyle", "marcus.doyle@northwind-support.example", 6, now.AddDays(-200));
+        marcus.SetPasswordHash(defaultHash);
+
+        return [alex, ben, priya, sara, marcus, yuki];
     }
 
     /// <summary>

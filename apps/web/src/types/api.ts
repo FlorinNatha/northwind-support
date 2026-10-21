@@ -105,7 +105,7 @@ export interface TicketEscalation {
 
 export interface EscalateTicketPayload {
   reason: string;
-  escalatedBy: string;
+  escalatedBy?: string;
 }
 
 export interface EscalateTicketResult {
@@ -182,4 +182,21 @@ export interface ProblemDetails {
   detail?: string;
   traceId?: string;
   errors?: Record<string, string[]>;
+}
+
+export interface AuthAgent {
+  id: number;
+  fullName: string;
+  email: string;
+}
+
+export interface LoginPayload {
+  email: string;
+  password: string;
+}
+
+export interface LoginResponse {
+  token: string;
+  expiresAtUtc: string;
+  agent: AuthAgent;
 }

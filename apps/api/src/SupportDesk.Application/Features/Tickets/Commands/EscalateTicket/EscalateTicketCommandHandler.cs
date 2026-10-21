@@ -69,7 +69,7 @@ public sealed class EscalateTicketCommandHandler(
             newDueAtUtc,
             newAgent?.Id,
             request.Reason,
-            request.EscalatedBy,
+            request.EscalatedBy ?? "Support Agent",
             now);
 
         await unitOfWork.SaveChangesAsync(ct);

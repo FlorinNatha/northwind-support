@@ -30,6 +30,12 @@ public static class DependencyInjection
         services.AddScoped<IUnitOfWork>(sp => sp.GetRequiredService<SupportDbContext>());
 
         services.AddSingleton<IClock, SystemClock>();
+        services.AddSingleton<IPasswordHasher, PasswordHasherService>();
+
+        var jwtOptions = configuration.GetSection(SupportDesk.Infrastructure.Configuration.JwtOptions.SectionName)
+            .Get<SupportDesk.Infrastructure.Configuration.JwtOptions>() ?? new SupportDesk.Infrastructure.Configuration.JwtOptions();
+        services.AddSingleton(jwtOptions);
+        services.AddSingleton<IJwtTokenService, JwtTokenService>();
 
         services.AddScoped<ITicketRepository, TicketRepository>();
         services.AddScoped<IAgentRepository, AgentRepository>();
